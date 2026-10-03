@@ -10,19 +10,19 @@ type WaitGroup struct {
 }
 
 func (wg *WaitGroup) Add(delta int) {
-	atomic.AddUint32(&wg.count, uint32(delta))
-}
+	newCount := atomic.AddUint32(&wg.count, uint32(delta))
 
-func (wg *WaitGroup) Done() {
-	newCount := atomic.AddUint32(&wg.count, ^uint32(0))
-
-	if newCount == ^uint32(0) {
-		panic("count has overflowed or gone into the negative!!!")
+	if int32(newCount) < 0 {
+		panic("count gone into the negative!!!")
 	}
 
 	if newCount == 0 {
 		futex.WakeAll(&wg.count)
 	}
+}
+
+func (wg *WaitGroup) Done() {
+	wg.Add(-1)
 }
 
 func (wg *WaitGroup) Wait() {
