@@ -1,13 +1,24 @@
 package spinlock
 
-import "sync/atomic"
+import (
+	"runtime"
+	"sync/atomic"
+)
+
+const spinsBeforeYield = 100
 
 type Spinlock struct {
 	locked atomic.Bool
 }
 
 func (s *Spinlock) Lock() {
+	count := 0
 	for !s.locked.CompareAndSwap(false, true) {
+		count++
+		if count == spinsBeforeYield {
+			count = 0
+			runtime.Gosched()
+		}
 	}
 }
 
@@ -27,10 +38,18 @@ type TTAS struct {
 }
 
 func (s *TTAS) Lock() {
-	for s.locked.Load() {
-	}
-
-	for !s.locked.CompareAndSwap(false, true) {
+	count := 0
+	for {
+		for s.locked.Load() {
+			count++
+			if count == spinsBeforeYield {
+				count = 0
+				runtime.Gosched()
+			}
+		}
+		if s.locked.CompareAndSwap(false, true) {
+			return
+		}
 	}
 }
 
