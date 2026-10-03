@@ -11,13 +11,17 @@ const (
 	contended
 )
 
+const spinsBeforeWait = 100
+
 type Mutex struct {
 	state uint32
 }
 
 func (m *Mutex) Lock() {
-	if atomic.CompareAndSwapUint32(&m.state, free, held) {
-		return
+	for range spinsBeforeWait {
+		if atomic.LoadUint32(&m.state) == free && atomic.CompareAndSwapUint32(&m.state, free, held) {
+			return
+		}
 	}
 
 	oldState := atomic.SwapUint32(&m.state, contended)
@@ -42,6 +46,6 @@ func (m *Mutex) Unlock() {
 	case contended:
 		futex.Wake(&m.state)
 	default:
-		panic("Unlnown state")
+		panic("Unknown state")
 	}
 }
