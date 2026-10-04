@@ -6,39 +6,33 @@ import (
 )
 
 const writer = 1 << 31
+const writerWaiting = 1 << 30
 
 type RWMutex struct {
 	state uint32
 }
 
-/*
-
-	Приведена наивная реализация
-
-	Чтобы добиться справедливости, можно добавить в состояние, сигнализирующее о появлении писателя.
-	Читатели обязаны проверять это состояние, и при необходимости пропускать писателя вперёд, тогда
-	писателю достаточно дождаться только текущих чтений.
-
-*/
-
 func (rw *RWMutex) RLock() {
 	for {
 		curState := atomic.LoadUint32(&rw.state)
-		if curState != writer && atomic.CompareAndSwapUint32(&rw.state, curState, curState+1) {
+		if curState&writer == 0 && curState&writerWaiting == 0 && atomic.CompareAndSwapUint32(&rw.state, curState, curState+1) {
 			return
 		}
-		futex.Wait(&rw.state, curState)
+		if curState&writer != 0 || curState&writerWaiting != 0 {
+			futex.Wait(&rw.state, curState)
+		}
 	}
 }
 
 func (rw *RWMutex) RUnlock() {
 	newState := atomic.AddUint32(&rw.state, ^uint32(0))
+	oldState := newState + 1
 
-	if newState == ^uint32(0) {
+	if oldState&^(writer|writerWaiting) == 0 {
 		panic("state has gone into the negative!!!")
 	}
 
-	if newState == 0 {
+	if newState == 0 || newState == writerWaiting {
 		futex.WakeAll(&rw.state)
 	}
 }
@@ -51,17 +45,28 @@ func (rw *RWMutex) Lock() {
 			return
 		}
 
-		futex.Wait(&rw.state, curState)
+		if curState == writerWaiting && atomic.CompareAndSwapUint32(&rw.state, curState, writer) {
+			return
+		}
+
+		curState = atomic.OrUint32(&rw.state, writerWaiting)
+
+		if curState != writerWaiting {
+			futex.Wait(&rw.state, curState)
+		}
 	}
 }
 
 func (rw *RWMutex) Unlock() {
-	curState := atomic.LoadUint32(&rw.state)
+	for {
+		curState := atomic.LoadUint32(&rw.state)
+		if curState&writer == 0 {
+			panic("Unlock without lock!!!")
+		}
 
-	if curState != writer {
-		panic("Unlock without lock!!!")
+		if atomic.CompareAndSwapUint32(&rw.state, curState, 0) {
+			futex.WakeAll(&rw.state)
+			return
+		}
 	}
-
-	atomic.StoreUint32(&rw.state, 0)
-	futex.WakeAll(&rw.state)
 }
