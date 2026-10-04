@@ -6,9 +6,9 @@ import (
 )
 
 const (
-	ready = iota
-	carried
-	completed
+	notStarted = iota
+	running
+	done
 )
 
 type Once struct {
@@ -16,19 +16,24 @@ type Once struct {
 }
 
 func (o *Once) Do(f func()) {
-	if atomic.CompareAndSwapUint32(&o.state, ready, carried) {
-		func() {
-			defer func() { recover() }()
-			f()
-		}()
-		atomic.StoreUint32(&o.state, completed)
-		futex.WakeAll(&o.state)
+	if atomic.LoadUint32(&o.state) == done {
 		return
 	}
 
-	futex.Wait(&o.state, carried)
+	if atomic.CompareAndSwapUint32(&o.state, notStarted, running) {
+		defer func() {
+			atomic.StoreUint32(&o.state, done)
+			futex.WakeAll(&o.state)
+		}()
+		f()
+		return
+	}
+
+	for atomic.LoadUint32(&o.state) != done {
+		futex.Wait(&o.state, running)
+	}
 }
 
 func (o *Once) Done() bool {
-	return atomic.LoadUint32(&o.state) == completed
+	return atomic.LoadUint32(&o.state) == done
 }
