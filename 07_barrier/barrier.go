@@ -12,10 +12,17 @@ type Barrier struct {
 }
 
 func New(n int) *Barrier {
+	if n <= 0 {
+		panic("barrier size must be positive")
+	}
 	return &Barrier{need: uint32(n)}
 }
 
 func (b *Barrier) Wait() {
+	if b.need == 0 {
+		panic("barrier size must be positive")
+	}
+
 	curRound := atomic.LoadUint32(&b.round)
 
 	newArrived := atomic.AddUint32(&b.arrived, 1)
