@@ -5,8 +5,16 @@ import (
 	"sync/atomic"
 )
 
-const writer = 1 << 31
-const writerWaiting = 1 << 30
+// Биты поля RWMutex.state. Младшие 30 бит хранят число активных
+// читателей, два старших бита — флаги писателя. Флаг ожидания
+// не даёт новым читателям входить, чтобы писатель не голодал.
+const (
+	// writer выставлен, пока замок держит писатель.
+	writer = 1 << 31
+
+	// writerWaiting выставлен, пока писатель ждёт освобождения замка.
+	writerWaiting = 1 << 30
+)
 
 type RWMutex struct {
 	state uint32
@@ -29,10 +37,10 @@ func (rw *RWMutex) RUnlock() {
 	oldState := newState + 1
 
 	if oldState&^(writer|writerWaiting) == 0 {
-		panic("state has gone into the negative!!!")
+		panic("RUnlock without RLock!!!")
 	}
 
-	if newState == 0 || newState == writerWaiting {
+	if newState == writerWaiting {
 		futex.WakeAll(&rw.state)
 	}
 }
@@ -41,19 +49,14 @@ func (rw *RWMutex) Lock() {
 	for {
 		curState := atomic.LoadUint32(&rw.state)
 
-		if curState == 0 && atomic.CompareAndSwapUint32(&rw.state, curState, writer) {
-			return
+		if curState&^writerWaiting == 0 {
+			if atomic.CompareAndSwapUint32(&rw.state, curState, writer) {
+				return
+			}
+		} else if atomic.CompareAndSwapUint32(&rw.state, curState, curState|writerWaiting) {
+			futex.Wait(&rw.state, curState|writerWaiting)
 		}
 
-		if curState == writerWaiting && atomic.CompareAndSwapUint32(&rw.state, curState, writer) {
-			return
-		}
-
-		curState = atomic.OrUint32(&rw.state, writerWaiting)
-
-		if curState != writerWaiting {
-			futex.Wait(&rw.state, curState)
-		}
 	}
 }
 
@@ -61,7 +64,7 @@ func (rw *RWMutex) Unlock() {
 	for {
 		curState := atomic.LoadUint32(&rw.state)
 		if curState&writer == 0 {
-			panic("Unlock without lock!!!")
+			panic("Unlock without Lock!!!")
 		}
 
 		if atomic.CompareAndSwapUint32(&rw.state, curState, 0) {
