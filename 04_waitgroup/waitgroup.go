@@ -1,17 +1,36 @@
 package waitgroup
 
+import (
+	"primitives/internal/futex"
+	"sync/atomic"
+)
+
 type WaitGroup struct {
 	count uint32
 }
 
 func (wg *WaitGroup) Add(delta int) {
-	panic("не реализовано")
+	newCount := atomic.AddUint32(&wg.count, uint32(delta))
+
+	if int32(newCount) < 0 {
+		panic("count gone into the negative!!!")
+	}
+
+	if newCount == 0 {
+		futex.WakeAll(&wg.count)
+	}
 }
 
 func (wg *WaitGroup) Done() {
-	panic("не реализовано")
+	wg.Add(-1)
 }
 
 func (wg *WaitGroup) Wait() {
-	panic("не реализовано")
+	for {
+		curCount := atomic.LoadUint32(&wg.count)
+		if curCount == 0 {
+			return
+		}
+		futex.Wait(&wg.count, curCount)
+	}
 }
